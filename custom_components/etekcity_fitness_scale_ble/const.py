@@ -195,6 +195,24 @@ def get_sensor_unique_id(device_name: str, user_id: str, sensor_key: str) -> str
     return f"{device_name}_{user_id}_{sensor_key}"
 
 
+def get_scale_device_identifier(address: str) -> tuple[str, str]:
+    """Return the device registry identifier for the scale itself.
+
+    The scale is also registered by its Bluetooth connection; the identifier
+    exists so person devices can reference the scale via ``via_device``.
+    """
+    return (DOMAIN, address)
+
+
+def get_person_device_identifier(address: str, user_id: str) -> tuple[str, str]:
+    """Return the device registry identifier for a person on a scale.
+
+    Scoped by scale address so the same person on two scales gets two
+    devices. The v1 legacy user (empty user_id) gets a reserved suffix.
+    """
+    return (DOMAIN, f"{address}_{user_id or '__legacy__'}")
+
+
 def parse_notify_service(stored: str) -> tuple[str, str]:
     """Normalize a stored notify-service value into (domain, name).
 

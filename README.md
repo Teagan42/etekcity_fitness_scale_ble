@@ -140,7 +140,9 @@ If the measurement is ambiguous (e.g., two users have similar weights, or a new 
 You can manage user profiles by navigating to your device in **Settings → Devices & Services → Etekcity Fitness Scale BLE**. Click **CONFIGURE** to:
 - **Add a new user:** Create a new profile with optional person entity link and mobile notification settings.
 - **Edit a user:** Update a user's name, linked person entity, mobile devices or body metric settings.
-- **Remove a user:** Delete a user's profile and all associated sensor entities.
+- **Remove a user:** Delete a user's profile, its device and all associated sensor entities.
+
+Each user gets their own device (named after the user, linked to the scale with "Connected via") holding that user's sensors. The scale device keeps the scale-wide entities such as the user directory and pending measurements. Existing sensors move to their user's device automatically and keep their entity IDs.
 
 ## Legacy Default User (Old Version Migration)
 

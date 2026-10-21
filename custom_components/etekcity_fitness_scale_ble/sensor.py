@@ -43,6 +43,8 @@ from .const import (
     DOMAIN,
     HEART_RATE_MODELS,
     ScaleModel,
+    get_person_device_identifier,
+    get_scale_device_identifier,
     get_sensor_unique_id,
 )
 from .coordinator import ScaleData, ScaleDataUpdateCoordinator
@@ -140,6 +142,54 @@ DIAGNOSTIC_SENSOR_DESCRIPTIONS = [
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
 ]
+
+
+def _scale_device_info(
+    name: str, address: str, coordinator: ScaleDataUpdateCoordinator
+) -> DeviceInfo:
+    """Return the device info for the scale itself."""
+    return DeviceInfo(
+        identifiers={get_scale_device_identifier(address)},
+        connections={(CONNECTION_BLUETOOTH, address)},
+        name=name,
+        manufacturer="Etekcity",
+        model=str(coordinator.scale_model) if coordinator.scale_model else None,
+    )
+
+
+def _remove_stale_person_devices(
+    hass: HomeAssistant,
+    entry: config_entries.ConfigEntry,
+    address: str,
+    user_profiles: list[dict[str, Any]],
+) -> None:
+    """Remove person devices whose user no longer exists on this scale.
+
+    Removing a user (or a user removed while HA was down) would otherwise
+    leave an empty device behind in the registry.
+    """
+    expected = {
+        get_person_device_identifier(address, profile.get(CONF_USER_ID, ""))
+        for profile in user_profiles
+    }
+    scale_identifier = get_scale_device_identifier(address)
+    device_reg = dr.async_get(hass)
+    for device_entry in dr.async_entries_for_config_entry(device_reg, entry.entry_id):
+        own_identifiers = {
+            identifier
+            for identifier in device_entry.identifiers
+            if identifier[0] == DOMAIN
+        }
+        if (
+            not own_identifiers
+            or scale_identifier in own_identifiers
+            or own_identifiers & expected
+        ):
+            continue
+        _LOGGER.debug("Removing stale person device %s", device_entry.name)
+        device_reg.async_update_device(
+            device_entry.id, remove_config_entry_id=entry.entry_id
+        )
 
 
 def _sync_display_unit_overrides(
@@ -334,6 +384,14 @@ async def async_setup_entry(
             CONF_SCALE_DISPLAY_UNIT, UnitOfMass.KILOGRAMS
         )
 
+        # Person devices reference the scale via_device, so the scale device
+        # must carry its identifier before any person entity is added.
+        dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id,
+            **_scale_device_info(entry.title, address, coordinator),
+        )
+        _remove_stale_person_devices(hass, entry, address, user_profiles)
+
         # Add diagnostic sensors for v2 (multi-user) only
         entities.extend(
             [
@@ -422,13 +480,13 @@ class ScaleSensor(RestoreSensor):
             name, self._user_id, entity_description.key
         )
 
-        self._attr_device_info = DeviceInfo(
-            connections={(CONNECTION_BLUETOOTH, address)},
-            name=name,
-            manufacturer="Etekcity",
-            model=str(coordinator.scale_model) if coordinator.scale_model else None,
-        )
+        self._attr_device_info = _scale_device_info(name, address, coordinator)
         self._coordinator = coordinator
+
+        # Last known scale firmware versions, mirrored into the scale's device
+        # entry and the weight sensors' attributes
+        self._hw_version: str | None = None
+        self._sw_version: str | None = None
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
@@ -492,21 +550,22 @@ class ScaleSensor(RestoreSensor):
         An empty or missing version keeps the one already in the registry.
         """
         device_entry = self._coordinator.async_get_device_entry()
-        if not device_entry or (
-            device_entry.hw_version == hw_version
-            and device_entry.sw_version == sw_version
-        ):
+        if not device_entry:
             return
         if hw_version is None or hw_version == "":
             hw_version = device_entry.hw_version
         if sw_version is None or sw_version == "":
             sw_version = device_entry.sw_version
+        self._hw_version = hw_version
+        self._sw_version = sw_version
 
+        if (
+            device_entry.hw_version == hw_version
+            and device_entry.sw_version == sw_version
+        ):
+            return
         dr.async_get(self.hass).async_update_device(
             device_entry.id, hw_version=hw_version, sw_version=sw_version
-        )
-        self._attr_device_info.update(
-            {HW_VERSION_KEY: hw_version, SW_VERSION_KEY: sw_version}
         )
 
     async def async_get_last_sensor_data(self) -> SensorExtraStoredData | None:
@@ -631,8 +690,8 @@ class ScaleWeightSensor(ScaleSensor):
     def extra_state_attributes(self):
         """Return the state attributes of the sensor."""
         attrs = {
-            HW_VERSION_KEY: self._attr_device_info.get(HW_VERSION_KEY),
-            SW_VERSION_KEY: self._attr_device_info.get(SW_VERSION_KEY),
+            HW_VERSION_KEY: self._hw_version,
+            SW_VERSION_KEY: self._sw_version,
         }
 
         # Add weight history for this user, converted to the unit the state
@@ -649,8 +708,8 @@ class ScaleWeightSensor(ScaleSensor):
         return ScaleWeightSensorExtraStoredData(
             self.native_value,
             self.native_unit_of_measurement,
-            self._attr_device_info.get(HW_VERSION_KEY),
-            self._attr_device_info.get(SW_VERSION_KEY),
+            self._hw_version,
+            self._sw_version,
         )
 
     async def async_get_last_sensor_data(
@@ -692,14 +751,16 @@ class ScaleUserSensor(ScaleSensor):
         self._user_id = user_id
         self._user_name = user_name
 
-        # Update entity attributes for user-specific sensor
-        # For legacy v1 user (empty user_id), don't prepend user name
-        if user_id == "":
-            self._attr_name = f"{entity_description.key.replace('_', ' ').title()}"
-        else:
-            self._attr_name = (
-                f"{user_name}'s {entity_description.key.replace('_', ' ').title()}"
-            )
+        # Each person gets their own device, linked to the scale. The entity
+        # name is just the measurement: HA prefixes it with the device (person)
+        # name. Existing entity_ids are kept by the registry.
+        self._attr_device_info = DeviceInfo(
+            identifiers={get_person_device_identifier(address, user_id)},
+            name=user_name,
+            manufacturer="Etekcity",
+            model="Person",
+            via_device=get_scale_device_identifier(address),
+        )
 
         # Use helper function to construct unique_id (handles v1 compatibility)
         self._attr_unique_id = get_sensor_unique_id(
@@ -763,8 +824,8 @@ class ScaleUserWeightSensor(ScaleUserSensor):
     def extra_state_attributes(self):
         """Return the state attributes of the sensor."""
         attrs = {
-            HW_VERSION_KEY: self._attr_device_info.get(HW_VERSION_KEY),
-            SW_VERSION_KEY: self._attr_device_info.get(SW_VERSION_KEY),
+            HW_VERSION_KEY: self._hw_version,
+            SW_VERSION_KEY: self._sw_version,
         }
 
         # Add weight history for this user, converted to the unit the state
@@ -781,8 +842,8 @@ class ScaleUserWeightSensor(ScaleUserSensor):
         return ScaleWeightSensorExtraStoredData(
             self.native_value,
             self.native_unit_of_measurement,
-            self._attr_device_info.get(HW_VERSION_KEY),
-            self._attr_device_info.get(SW_VERSION_KEY),
+            self._hw_version,
+            self._sw_version,
         )
 
     async def async_get_last_sensor_data(
@@ -819,12 +880,7 @@ class ScaleUserDirectorySensor(SensorEntity):
         """
         self.entity_description = DIAGNOSTIC_SENSOR_DESCRIPTIONS[0]
         self._attr_unique_id = f"{name}_user_directory"
-        self._attr_device_info = DeviceInfo(
-            connections={(CONNECTION_BLUETOOTH, address)},
-            name=name,
-            manufacturer="Etekcity",
-            model=str(coordinator.scale_model) if coordinator.scale_model else None,
-        )
+        self._attr_device_info = _scale_device_info(name, address, coordinator)
         self._coordinator = coordinator
 
     async def async_added_to_hass(self) -> None:
@@ -875,12 +931,7 @@ class ScalePendingMeasurementsSensor(SensorEntity):
         """
         self.entity_description = DIAGNOSTIC_SENSOR_DESCRIPTIONS[1]
         self._attr_unique_id = f"{name}_pending_measurements"
-        self._attr_device_info = DeviceInfo(
-            connections={(CONNECTION_BLUETOOTH, address)},
-            name=name,
-            manufacturer="Etekcity",
-            model=str(coordinator.scale_model) if coordinator.scale_model else None,
-        )
+        self._attr_device_info = _scale_device_info(name, address, coordinator)
         self._coordinator = coordinator
         self._remove_listener = None
 
