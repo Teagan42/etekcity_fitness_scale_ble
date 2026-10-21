@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timedelta
-
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from .const import (
     ADAPTIVE_TOLERANCE_MAX_MULTIPLIER,

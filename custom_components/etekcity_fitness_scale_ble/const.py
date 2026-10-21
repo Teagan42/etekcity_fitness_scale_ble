@@ -5,7 +5,9 @@ from etekcity_esf551_ble import (
     BaseBodyMetrics,
     BodyMetrics,
     BodyMetricsV2,
-    ScaleModel as ScaleModel,
+)
+from etekcity_esf551_ble import (
+    ScaleModel as ScaleModel,  # noqa: PLC0414 - explicit re-export, see below
 )
 
 DOMAIN = "etekcity_fitness_scale_ble"

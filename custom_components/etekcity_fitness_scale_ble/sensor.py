@@ -1,14 +1,15 @@
 """Support for Etekcity Fitness Scale BLE sensors."""
 
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from typing import Any, Self
 
 from etekcity_esf551_ble import HEART_RATE_KEY, IMPEDANCE_KEY, WEIGHT_KEY, WeightUnit
-
 from homeassistant import config_entries
 from homeassistant.components.sensor import (
     DOMAIN as SENSOR_DOMAIN,
+)
+from homeassistant.components.sensor import (
     RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
@@ -412,7 +413,7 @@ class ScaleSensor(RestoreSensor):
         )
         self._attr_icon = entity_description.icon
 
-        self._attr_name = f"{entity_description.key.replace("_", " ").title()}"
+        self._attr_name = f"{entity_description.key.replace('_', ' ').title()}"
 
         # Store user_id for history lookups (empty string for v1 compatibility)
         self._user_id = user_id or ""

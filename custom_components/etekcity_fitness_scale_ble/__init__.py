@@ -5,17 +5,17 @@ from __future__ import annotations
 import logging
 from copy import deepcopy
 from datetime import datetime
+from urllib.parse import unquote
 
 import voluptuous as vol
-
 from bleak_retry_connector import close_stale_connections_by_address
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_UNIT_SYSTEM, Platform, UnitOfMass
 from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.start import async_at_started
-from urllib.parse import unquote
 
 from .const import (
     CONF_BIRTHDATE,
@@ -42,8 +42,6 @@ from .const import (
     PASSIVE_SCAN_ISSUE_ID,
     ScaleModel,
 )
-from homeassistant.exceptions import ConfigEntryNotReady
-
 from .coordinator import BluetoothNotAvailableError, ScaleDataUpdateCoordinator
 from .repairs import (
     async_clear_repair_issues_for_entry,
@@ -286,8 +284,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Helper: resolve device_id -> coordinator and optionally validate user IDs
     def _get_coordinator_for_device(device_id: str) -> ScaleDataUpdateCoordinator:
         """Return coordinator for a specific device_id or raise HomeAssistantError."""
-        from homeassistant.helpers import device_registry as dr
         from homeassistant.exceptions import HomeAssistantError
+        from homeassistant.helpers import device_registry as dr
 
         device_registry = dr.async_get(hass)
         device_entry = device_registry.async_get(device_id)
@@ -668,7 +666,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                     user_id,
                                     timestamp,
                                 )
-                        except Exception as error:
+                        except Exception as error:  # noqa: BLE001
                             _LOGGER.warning(
                                 "Failed to ignore candidate %s for measurement %s: %s",
                                 user_id,
@@ -686,7 +684,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             else:
                 _LOGGER.warning("Unknown scale action: %s", action)
 
-        except Exception as ex:
+        except Exception as ex:  # noqa: BLE001
             _LOGGER.error("Error handling mobile app notification action: %s", ex)
 
     # Register the event listener once (shared across all entries)

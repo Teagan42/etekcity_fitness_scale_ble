@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from bisect import bisect_left
-from copy import deepcopy
-from datetime import datetime, timedelta
+import contextlib
 import logging
-from math import floor
 import platform
 import time
+from bisect import bisect_left
 from collections.abc import Callable
+from copy import deepcopy
+from datetime import datetime, timedelta
 from functools import partial
+from math import floor
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -43,12 +44,12 @@ from etekcity_esf551_ble import (
 )
 from habluetooth import HaScannerRegistration
 from habluetooth import get_manager as habluetooth_get_manager
-from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.components import persistent_notification
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, UnitOfMass
+from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH
 from homeassistant.helpers.event import async_call_later
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, UnitOfMass
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import MassConverter
 
@@ -59,9 +60,9 @@ from .const import (
     CONF_KEEP_HISTORY_FOREVER,
     CONF_MAX_HISTORY_SIZE,
     CONF_MOBILE_NOTIFY_SERVICES,
+    CONF_USE_ALTERNATIVE_ALGORITHM,
     CONF_USER_ID,
     CONF_USER_NAME,
-    CONF_USE_ALTERNATIVE_ALGORITHM,
     CONF_WEIGHT_HISTORY,
     DOMAIN,
     HISTORY_RETENTION_DAYS,
@@ -153,8 +154,6 @@ def _norm_country_code(config: Any) -> str:
 
 class BluetoothNotAvailableError(Exception):
     """Exception raised when no Bluetooth adapter or ESPHome proxy is available."""
-
-    pass
 
 
 def _get_bluetooth_manager() -> Any | None:
@@ -292,7 +291,7 @@ class BleakScannerESPHome(BaseBleakScanner):
                 try:
                     self._subscribe_to_advertisements(client)
                     successful_clients += 1
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     _LOGGER.error(
                         "Failed to subscribe to advertisements for %s: %s",
                         client.address,
@@ -306,7 +305,7 @@ class BleakScannerESPHome(BaseBleakScanner):
                     self._client_info[client].name,
                     self._client_features[client],
                 )
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.warning(
                     "Failed to initialize client %s: %s", client.address, ex
                 )
@@ -345,7 +344,7 @@ class BleakScannerESPHome(BaseBleakScanner):
                 try:
                     unsubscribe()
                     _LOGGER.debug("Unsubscribed from client %s", client.address)
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     _LOGGER.warning(
                         "Error unsubscribing from client %s: %s", client.address, ex
                     )
@@ -364,7 +363,6 @@ class BleakScannerESPHome(BaseBleakScanner):
         the service_uuids provided at initialization.
         """
         # ESPHome doesn't support additional filters
-        pass
 
     def _on_bluetooth_le_advertisement_response(self, client: APIClient, msg) -> None:
         """Adapt a raw protobuf advertisement response to the model object.
@@ -476,7 +474,7 @@ class BleakScannerESPHome(BaseBleakScanner):
                 local_name, service_uuids, service_data, manufacturer_data, tx_power = (
                     parse_advertisement_data_tuple((adv.data,))
                 )
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.debug(
                     "Error parsing advertisement data from %s for %s: %s",
                     client.address,
@@ -542,7 +540,7 @@ class BleakScannerESPHome(BaseBleakScanner):
         (`RAW_ADVERTISEMENTS` feature flag on the same cached DeviceInfo).
         """
         features = self._client_features[client]
-        connection = client._connection  # noqa: SLF001
+        connection = client._connection
 
         if features & BluetoothProxyFeature.RAW_ADVERTISEMENTS:
             self._client_unsubscribers[client] = connection.add_message_callback(
@@ -644,7 +642,7 @@ class BleakScannerHybrid(BaseBleakScanner):
             )
             self._scanners.append(self._native_scanner)
             _LOGGER.debug("Native scanner initialized successfully")
-        except Exception as ex:
+        except Exception as ex:  # noqa: BLE001
             _LOGGER.warning("Failed to initialize native scanner: %s", ex)
 
         # Try to create proxy scanner
@@ -657,7 +655,7 @@ class BleakScannerHybrid(BaseBleakScanner):
                 _LOGGER.debug("Proxy scanner initialized successfully")
             else:
                 _LOGGER.warning("No ESPHome clients provided for proxy scanner")
-        except Exception as ex:
+        except Exception as ex:  # noqa: BLE001
             _LOGGER.warning("Failed to initialize proxy scanner: %s", ex)
 
         # Check if we have at least one scanner
@@ -718,10 +716,8 @@ class BleakScannerHybrid(BaseBleakScanner):
                 # self.stop() — self._scanners still holds every scanner in
                 # this loop, so self.stop() would also stop scanners that
                 # already started successfully in this same pass.
-                try:
+                with contextlib.suppress(Exception):
                     await scanner.stop()
-                except Exception:  # noqa: BLE001
-                    pass
                 if scanner is self._native_scanner:
                     self._native_scanner = None
                 if scanner is self._proxy_scanner:
@@ -761,7 +757,7 @@ class BleakScannerHybrid(BaseBleakScanner):
             try:
                 await scanner.stop()
                 _LOGGER.debug(f"Stopped scanner: {type(scanner).__name__}")
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.warning(f"Error stopping {type(scanner).__name__}: {ex}")
 
         self._scanning = False
@@ -772,7 +768,7 @@ class BleakScannerHybrid(BaseBleakScanner):
         for scanner in self._scanners:
             try:
                 scanner.set_scanning_filter(**kwargs)
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.warning(
                     f"Error setting filter on {type(scanner).__name__}: {ex}"
                 )
@@ -783,9 +779,10 @@ class BleakScannerHybrid(BaseBleakScanner):
         for scanner in self._scanners:
             try:
                 scanner.register_detection_callback(callback)
-            except Exception as ex:
+            except Exception:
                 _LOGGER.exception(
-                    f"Error registering detection callback on {type(scanner).__name__}: {ex}"
+                    "Error registering detection callback on %s",
+                    type(scanner).__name__,
                 )
 
     @property
@@ -805,7 +802,6 @@ class BleakScannerHybrid(BaseBleakScanner):
         """Set the dictionary of seen devices."""
         # This is intentionally a no-op as we don't want to override
         # the seen devices of individual scanners
-        pass
 
 
 class ScaleDataUpdateCoordinator:
@@ -1013,7 +1009,7 @@ class ScaleDataUpdateCoordinator:
                 format="medium",
                 locale=language.replace("-", "_"),
             )
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             _LOGGER.debug(
                 "Babel format_date failed (locale=%s), using strftime fallback: %s",
                 language,
@@ -1059,7 +1055,7 @@ class ScaleDataUpdateCoordinator:
             return babel_format_datetime(
                 localized, format="short", locale=language.replace("-", "_")
             )
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             _LOGGER.debug(
                 "Babel format_datetime failed (locale=%s), using strftime fallback: %s",
                 language,
@@ -1749,10 +1745,8 @@ class ScaleDataUpdateCoordinator:
                 except BleakError as err:
                     _LOGGER.warning("Failed to initialize Bluetooth scanner: %s", err)
                     scanner = None
-                except Exception as ex:
-                    _LOGGER.exception(
-                        "Unexpected error creating Bluetooth scanner: %s", ex
-                    )
+                except Exception:
+                    _LOGGER.exception("Unexpected error creating Bluetooth scanner")
                     scanner = None
             elif not native:
                 # No ESPHome proxies AND no native adapter = no Bluetooth available
@@ -1764,8 +1758,8 @@ class ScaleDataUpdateCoordinator:
         except BluetoothNotAvailableError:
             # Re-raise to be handled by caller
             raise
-        except Exception as ex:
-            _LOGGER.exception("Error getting Bluetooth scanner: %s", ex)
+        except Exception:
+            _LOGGER.exception("Error getting Bluetooth scanner")
             return None
 
     async def _async_start(self) -> None:
@@ -1775,7 +1769,7 @@ class ScaleDataUpdateCoordinator:
                 _LOGGER.debug("Stopping existing client")
                 try:
                     await self._client.async_stop()
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     _LOGGER.warning("Error stopping existing client: %s", ex)
                 finally:
                     self._client = None
@@ -1891,15 +1885,13 @@ class ScaleDataUpdateCoordinator:
 
                 await asyncio.wait_for(self._client.async_start(), timeout=30.0)
                 _LOGGER.debug("Scale client started successfully")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOGGER.error(
                     "Timeout while starting scale client for %s", self.address
                 )
                 if self._client:
-                    try:
+                    with contextlib.suppress(Exception):
                         await self._client.async_stop()
-                    except Exception:
-                        pass
                     self._client = None
                 raise
             except BleakError as err:
@@ -1909,23 +1901,19 @@ class ScaleDataUpdateCoordinator:
                     err,
                 )
                 if self._client:
-                    try:
+                    with contextlib.suppress(Exception):
                         await self._client.async_stop()
-                    except Exception:
-                        pass
                     self._client = None
                 raise
-            except Exception as ex:
-                _LOGGER.exception("Unexpected error starting scale client: %s", ex)
+            except Exception:
+                _LOGGER.exception("Unexpected error starting scale client")
                 if self._client:
-                    try:
+                    with contextlib.suppress(Exception):
                         await self._client.async_stop()
-                    except Exception:
-                        pass
                     self._client = None
                 raise
-        except Exception as ex:
-            _LOGGER.exception("Failed to initialize scale client: %s", ex)
+        except Exception:
+            _LOGGER.exception("Failed to initialize scale client")
             raise
 
     def _registration_changed(self, registration: HaScannerRegistration) -> None:
@@ -2205,7 +2193,7 @@ class ScaleDataUpdateCoordinator:
             if self._scanner_change_cb_unregister:
                 try:
                     self._scanner_change_cb_unregister()
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     _LOGGER.warning("Error unregistering scanner callback: %s", ex)
                 finally:
                     self._scanner_change_cb_unregister = None
@@ -2214,7 +2202,7 @@ class ScaleDataUpdateCoordinator:
             if self._client:
                 try:
                     await self._client.async_stop()
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     _LOGGER.warning("Error stopping client: %s", ex)
                 finally:
                     self._client = None
@@ -2245,7 +2233,7 @@ class ScaleDataUpdateCoordinator:
                     self._hass,
                     notification_id=f"etekcity_scale_{self.address}_{timestamp}",
                 )
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.warning(
                     "Error dismissing persistent notification for %s: %s",
                     timestamp,
@@ -2269,7 +2257,7 @@ class ScaleDataUpdateCoordinator:
                         service_name,
                         tag,
                     )
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     _LOGGER.warning(
                         "Error dismissing mobile notification for %s on %s: %s",
                         user_id,
@@ -2443,7 +2431,7 @@ class ScaleDataUpdateCoordinator:
                             service,
                             notification_tag,
                         )
-                    except Exception as ex:
+                    except Exception as ex:  # noqa: BLE001
                         _LOGGER.error(
                             "Failed to clear notification (service: %s, tag: %s, error: %s)",
                             service,
@@ -2485,7 +2473,7 @@ class ScaleDataUpdateCoordinator:
         for listener_callback in self._diagnostic_listeners:
             try:
                 listener_callback()
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.error("Error notifying diagnostic listener: %s", ex)
 
     @callback
@@ -2598,7 +2586,7 @@ class ScaleDataUpdateCoordinator:
                     await self._create_ambiguous_notification(
                         weight_kg, impedance, candidates, timestamp
                     )
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     _LOGGER.error(
                         "Failed to create ambiguous notification (timestamp: %s, error: %s)",
                         timestamp,
@@ -2661,7 +2649,7 @@ class ScaleDataUpdateCoordinator:
             for update_callback in self._user_callbacks.get(user_id, []):
                 try:
                     update_callback(data)
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     _LOGGER.error(
                         "Error updating listener for user_id: %s (%s: %s)",
                         user_id,
@@ -2673,8 +2661,9 @@ class ScaleDataUpdateCoordinator:
         # Calculate body metrics if enabled for this user (newest measurement scenario)
         if user_profile.get("body_metrics_enabled", False):
             try:
-                from etekcity_esf551_ble import Sex, calc_age
                 from datetime import date as dt_date
+
+                from etekcity_esf551_ble import Sex, calc_age
 
                 weight_kg = data.measurements.get("weight")
                 impedance = data.measurements.get("impedance")
@@ -2766,7 +2755,7 @@ class ScaleDataUpdateCoordinator:
         for update_callback in self._user_callbacks.get(user_id, []):
             try:
                 update_callback(data)
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.error(
                     "Error updating listener for user_id: %s (%s: %s)",
                     user_id,
@@ -2986,7 +2975,7 @@ class ScaleDataUpdateCoordinator:
                 for user_id, user_name in users:
                     notified_services.append((user_id, service_name))
 
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.error(
                     "Failed to send mobile notification to %s: %s",
                     service_name,
@@ -3219,8 +3208,9 @@ class ScaleDataUpdateCoordinator:
         # Calculate body metrics if enabled for this user
         if user_profile.get("body_metrics_enabled", False):
             try:
-                from etekcity_esf551_ble import Sex, calc_age
                 from datetime import date as dt_date
+
+                from etekcity_esf551_ble import Sex, calc_age
 
                 weight_kg = measurements.get("weight")
                 impedance = measurements.get("impedance")
@@ -3485,7 +3475,7 @@ class ScaleDataUpdateCoordinator:
                     updated_candidates,
                     timestamp,
                 )
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.error(
                     "Failed to re-create notification after ignore (timestamp: %s): %s",
                     timestamp,
@@ -3685,7 +3675,7 @@ class ScaleDataUpdateCoordinator:
         for update_callback in self._user_callbacks.get(user_id, []):
             try:
                 update_callback(update_data)
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 _LOGGER.error(
                     "Error updating sensor for user_id: %s (%s: %s)",
                     user_id,
