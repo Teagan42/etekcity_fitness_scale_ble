@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime
 import logging
 import re
 import unicodedata
+from datetime import datetime
 from typing import Any
 
 import voluptuous as vol
-from voluptuous.schema_builder import Marker
-
 from etekcity_esf551_ble import (
     CAPABILITIES,
     ETEKCITY_MANUFACTURER_ID,
@@ -33,11 +31,14 @@ from homeassistant.const import (
     UnitOfMass,
 )
 from homeassistant.data_entry_flow import FlowResult, section
-from homeassistant.helpers import config_validation as cv, selector
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import selector
 from homeassistant.util.unit_conversion import DistanceConverter
+from voluptuous.schema_builder import Marker
 
 from .const import (
+    BODY_METRICS_MODELS,
     CONF_ATHLETE,
     CONF_BIRTHDATE,
     CONF_BODY_METRICS_ENABLED,
@@ -56,12 +57,11 @@ from .const import (
     CONF_SCALE_MODEL,
     CONF_SEX,
     CONF_UPDATED_AT,
+    CONF_USE_ALTERNATIVE_ALGORITHM,
     CONF_USER_ID,
     CONF_USER_NAME,
     CONF_USER_PROFILES,
-    CONF_USE_ALTERNATIVE_ALGORITHM,
     CONF_WEIGHT_HISTORY,
-    BODY_METRICS_MODELS,
     DOMAIN,
     HISTORY_RETENTION_DAYS,
     MAX_HISTORY_SIZE,
@@ -263,7 +263,7 @@ def _get_mobile_notify_services(hass) -> dict[str, str]:
     services = {}
     notify_services = hass.services.async_services().get("notify", {})
 
-    for service_name in notify_services.keys():
+    for service_name in notify_services:
         if service_name.startswith("mobile_app_"):
             # Format: "mobile_app_johns_iphone" -> "Johns iPhone"
             display_name = (

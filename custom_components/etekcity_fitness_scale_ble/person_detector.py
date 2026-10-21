@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .adaptive_tolerance import get_tolerance_for_user
@@ -320,7 +320,7 @@ class PersonDetector:
                 continue
 
             # Check if user has usable weight history via adaptive tolerance
-            ref_weight, tolerance_kg = get_tolerance_for_user(
+            _ref_weight, tolerance_kg = get_tolerance_for_user(
                 user_profile, current_time
             )
 
