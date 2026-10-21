@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version part to bump"
+        type: choice
+        options: ["patch", "minor", "major"]
+        default: "patch"
+
+# Never run two releases at once: each one pushes a commit to main.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    name: "Bump version and publish release"
+    runs-on: "ubuntu-latest"
+    # The bump commit is pushed with GITHUB_TOKEN, which doesn't trigger
+    # workflows; the message check is a second guard against a release loop.
+    if: "!startsWith(github.event.head_commit.message, 'Release v')"
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MANIFEST: custom_components/etekcity_fitness_scale_ble/manifest.json
+    steps:
+      - name: "Checkout the repository"
+        uses: "actions/checkout@v4.1.7"
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: "Pick the version part to bump"
+        id: bump
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            bump="${{ inputs.bump }}"
+          else
+            # Labels on the PR that was merged: "major" or "minor", else patch.
+            labels=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+              --jq '[.[].labels[].name] | join(" ")')
+            case " $labels " in
+              *" major "*) bump=major ;;
+              *" minor "*) bump=minor ;;
+              *) bump=patch ;;
+            esac
+          fi
+          echo "part=$bump" >> "$GITHUB_OUTPUT"
+
+      - name: "Bump the manifest version"
+        id: version
+        run: |
+          python3 - "${{ steps.bump.outputs.part }}" <<'EOF'
+          import json
+          import os
+          import sys
+
+          part = sys.argv[1]
+          path = os.environ["MANIFEST"]
+          with open(path) as f:
+              manifest = json.load(f)
+
+          major, minor, patch = (int(p) for p in manifest["version"].split("."))
+          if part == "major":
+              major, minor, patch = major + 1, 0, 0
+          elif part == "minor":
+              minor, patch = minor + 1, 0
+          else:
+              patch += 1
+          manifest["version"] = f"{major}.{minor}.{patch}"
+
+          with open(path, "w") as f:
+              json.dump(manifest, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"version={manifest['version']}\n")
+          EOF
+
+      - name: "Commit and tag"
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::Tag v$version already exists"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST"
+          git commit -m "Release v$version"
+          git tag "v$version"
+          git push origin HEAD:main "v$version"
+
+      - name: "Publish the release"
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --title "v${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            --verify-tag
